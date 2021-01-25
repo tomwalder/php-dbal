@@ -49,6 +49,11 @@ class Statement
     const NAMED_PARAM_REGEX = "/\?(\w+)/";
 
     /**
+     * @var bool
+     */
+    public static $bol_fetch_array = false;
+
+    /**
      * Current state
      *
      * @var int
@@ -89,13 +94,6 @@ class Statement
      * @var array
      */
     private $arr_bind_params = array();
-
-    /**
-     * Use functions only supported by mysqlnd?
-     *
-     * @var bool
-     */
-    private $bol_use_mysqlnd = FALSE;
 
     /**
      * The class into which results will be hydrated (presumably triggering
@@ -147,7 +145,6 @@ class Statement
         $this->str_sql = $str_sql;
         $this->int_state = self::STATE_INIT;
         $this->str_result_class = $str_result_class;
-        $this->bol_use_mysqlnd = extension_loaded('mysqlnd');
         self::$int_statement++;
     }
 
@@ -282,9 +279,9 @@ class Statement
         $this->obj_stmt = $this->obj_db->prepare($this->str_sql);
         if (!$this->obj_stmt) {
             $str_message = sprintf(
-               'Error preparing statement - Code: %d, Message: "%s"',
-               $this->obj_db->errno,
-               $this->obj_db->error
+                'Error preparing statement - Code: %d, Message: "%s"',
+                $this->obj_db->errno,
+                $this->obj_db->error
             );
             throw DB\Exception\Factory::build($str_message, $this->obj_db->errno);
         }
@@ -304,11 +301,7 @@ class Statement
         if (!$this->process($arr_params)) {
             return NULL;
         }
-        if ($this->bol_use_mysqlnd) {
-            return $this->fetchNative($int_fetch_mode);
-        } else {
-            return $this->fetchOldSchool($int_fetch_mode);
-        }
+        return $this->fetchNative($int_fetch_mode);
     }
 
     /**
@@ -328,7 +321,11 @@ class Statement
             if ($this->str_result_class) {
                 $mix_data = $obj_result->fetch_object($this->str_result_class);
             } else {
-                $mix_data = $obj_result->fetch_object();
+                if (true === self::$bol_fetch_array) {
+                    $mix_data = $obj_result->fetch_assoc();
+                } else {
+                    $mix_data = $obj_result->fetch_object();
+                }
             }
         } else {
             $mix_data = array();
@@ -337,55 +334,18 @@ class Statement
                     $mix_data[] = $obj_row;
                 }
             } else {
-                while ($obj_row = $obj_result->fetch_object()) {
-                    $mix_data[] = $obj_row;
+                if (true === self::$bol_fetch_array) {
+                    while ($arr_row = $obj_result->fetch_assoc()) {
+                        $mix_data[] = $arr_row;
+                    }
+                } else {
+                    while ($obj_row = $obj_result->fetch_object()) {
+                        $mix_data[] = $obj_row;
+                    }
                 }
             }
         }
         $obj_result->free();
-        return $mix_data;
-    }
-
-    /**
-     * Fetch for non-mysqlnd environments
-     *
-     * @todo review support for custom classes
-     * @todo review pros/cons of using store_result()
-     * @todo fix statements using AS
-     *
-     * @param $int_fetch_mode
-     * @return array|null|object|\stdClass
-     */
-    private function fetchOldSchool($int_fetch_mode)
-    {
-        $this->obj_stmt->store_result();
-        $obj_meta = $this->obj_stmt->result_metadata();
-        $arr_fields = $obj_meta->fetch_fields();
-        $obj_result = (NULL !== $this->str_result_class ? new $this->str_result_class() : new \stdClass());
-        $arr_bind_fields = array();
-        foreach ($arr_fields as $obj_field) {
-            $arr_bind_fields[] = & $obj_result->{$obj_field->name};
-        }
-        call_user_func_array(array($this->obj_stmt, 'bind_result'), $arr_bind_fields);
-        if (DB::FETCH_MODE_ONE === $int_fetch_mode) {
-            if ($this->obj_stmt->fetch()) {
-                $mix_data = $obj_result;
-            } else {
-                $mix_data = NULL;
-            }
-        } else {
-            $mix_data = array();
-            while ($this->obj_stmt->fetch()) {
-                // Manual clone method - nasty, but required because of all the binding references
-                // to avoid each row being === the last row in the result set
-                $obj_row = (NULL !== $this->str_result_class ? new $this->str_result_class() : new \stdClass());
-                foreach ($arr_fields as $obj_field) {
-                    $obj_row->{$obj_field->name} = $obj_result->{$obj_field->name};
-                }
-                $mix_data[] = $obj_row;
-            }
-        }
-        $this->obj_stmt->free_result();
         return $mix_data;
     }
 
