@@ -156,6 +156,13 @@ class DB
         return ($obj_stmt->getAffectedRows() > 0);
     }
 
+    public function insertBulk($str_sql, $arr_params)
+    {
+        $obj_stmt = new DB\Statement($this->obj_db, $str_sql);
+        $obj_stmt->insert($arr_params);
+        return $obj_stmt->getAffectedRows();
+    }
+
     /**
      * Delegate to the Statement::update() method. Worth intentionally keeping
      * this level of indirection incase we want to change the behaviour of each
